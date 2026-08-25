@@ -1,0 +1,22 @@
+{
+  "name": "arns-local-gateway",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Resolve ArNS names locally and serve permaweb sites through a lightweight native gateway.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "mirror": "node src/mirror.js",
+    "check:endpoints": "node src/check-endpoints.js",
+    "test": "node --test",
+    "check": "npm test"
+  },
+  "keywords": ["arweave", "arns", "permaweb", "gateway", "web3"],
+  "dependencies": {
+    "@ar.io/sdk": "4.2.0",
+    "@solana/kit": "6.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

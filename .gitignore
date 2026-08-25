@@ -1,0 +1,17 @@
+.cache/
+.data/
+.npm-cache/
+.tmp/
+node_modules/
+coverage/
+.env*
+!.env.example
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
