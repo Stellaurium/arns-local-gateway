@@ -97,3 +97,34 @@ test('stores direct bundle results permanently and does not retrieve them twice'
   assert.equal(second.body.toString(), 'permanent');
   assert.equal(calls, 1);
 });
+
+test('coalesces concurrent downloads of one immutable ID', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-arns-concurrent-test-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let calls = 0;
+  const id = 'D'.repeat(43);
+  const store = new ImmutableContentStore({ directory, providerUrls: [], timeoutMs: 100, maxResponseBytes: 1024,
+    logger: { info() {} }, bundleSource: { async get() {
+      calls++; await new Promise(resolve => setTimeout(resolve, 10));
+      return { body: Buffer.from('shared'), metadata: { id, headers: {} }, source: 'arweave-peer-chunks' };
+    } } });
+  const result = await Promise.all(Array.from({ length: 12 }, () => store.get(id)));
+  assert.equal(calls, 1);
+  assert.equal(result.length, 12);
+  assert.equal((await store.get(id)).source, 'immutable-store');
+});
+
+test('retries a transient provider connection failure once, without caching failure', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-arns-retry-test-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const id = 'E'.repeat(43); let calls = 0;
+  const store = new ImmutableContentStore({ directory, providerUrls: ['https://provider.example/raw/{id}'], timeoutMs: 100, maxResponseBytes: 1024, logger: { info() {} } });
+  store.fetchProvider = async () => {
+    calls++;
+    if (calls === 1) throw new TypeError('fetch failed');
+    return { body: Buffer.from('retried'), metadata: { id, headers: {} }, source: 'data-provider' };
+  };
+  assert.equal((await store.get(id)).body.toString(), 'retried');
+  assert.equal(calls, 2);
+  assert.equal((await store.get(id)).source, 'immutable-store');
+});

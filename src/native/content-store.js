@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { retryTransientRead } from './retry-read.js';
 
 const DATA_ID = /^[A-Za-z0-9_-]{43}$/;
 
@@ -36,6 +37,7 @@ export class ImmutableContentStore {
     this.maxResponseBytes = maxResponseBytes;
     this.bundleSource = bundleSource;
     this.logger = logger;
+    this.pending = new Map();
   }
 
   async getLocal(id) {
@@ -56,7 +58,7 @@ export class ImmutableContentStore {
   async put(id, body, metadata) {
     const files = filesFor(this.directory, id);
     await fs.mkdir(path.dirname(files.body), { recursive: true });
-    const suffix = `${process.pid}-${Date.now()}.tmp`;
+    const suffix = `${process.pid}-${crypto.randomUUID()}.tmp`;
     const bodyTemp = `${files.body}.${suffix}`;
     const metadataTemp = `${files.metadata}.${suffix}`;
     await Promise.all([
@@ -72,7 +74,7 @@ export class ImmutableContentStore {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '0', 10);
       if (declaredLength > this.maxResponseBytes) throw new Error(`Response exceeds ${this.maxResponseBytes} bytes`);
       const body = Buffer.from(await response.arrayBuffer());
@@ -99,6 +101,14 @@ export class ImmutableContentStore {
   }
 
   async get(id) {
+    if (!DATA_ID.test(id)) throw new Error(`Invalid Arweave data ID: ${id}`);
+    if (this.pending.has(id)) return this.pending.get(id);
+    const operation = this.getUnshared(id).finally(() => this.pending.delete(id));
+    this.pending.set(id, operation);
+    return operation;
+  }
+
+  async getUnshared(id) {
     const local = await this.getLocal(id);
     if (local) return local;
     const errors = [];
@@ -114,7 +124,7 @@ export class ImmutableContentStore {
     }
     for (const template of this.providerUrls) {
       try {
-        const result = await this.fetchProvider(id, template);
+        const result = await retryTransientRead(() => this.fetchProvider(id, template));
         await this.put(id, result.body, result.metadata);
         this.logger.info(`Stored immutable data ${id} (${result.body.length} bytes)`);
         return result;

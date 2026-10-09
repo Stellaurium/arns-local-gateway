@@ -1,6 +1,6 @@
 {
   "name": "arns-local-gateway",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Resolve ArNS names locally and serve permaweb sites through a lightweight native gateway.",
   "type": "module",
@@ -14,9 +14,10 @@
   "keywords": ["arweave", "arns", "permaweb", "gateway", "web3"],
   "dependencies": {
     "@ar.io/sdk": "4.2.0",
-    "@solana/kit": "6.8.0"
+    "@solana/kit": "6.8.0",
+    "@solana/rpc-spec-types": "6.8.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.0"
   }
 }

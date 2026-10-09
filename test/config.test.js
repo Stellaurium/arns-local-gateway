@@ -27,3 +27,11 @@ test('accepts process-local endpoint overrides without changing global configura
   assert.equal(config.peerDiscoveryMaxPeers, 200);
   assert.equal(config.peerRefreshIntervalMs, 3_600_000);
 });
+
+test('RPC query cache and browser bridge can be explicitly disabled', () => {
+  const config = loadConfig({ SOLANA_RPC_CACHE_TTL_MS: '0', SOLANA_RPC_BRIDGE_NAMES: '', SOLANA_RPC_DISCOVERY_ENABLED: 'false' });
+  assert.equal(config.solanaRpcCacheTtlMs, 0);
+  assert.deepEqual(config.solanaRpcBridgeNames, []);
+  assert.equal(config.solanaRpcDiscoveryEnabled, false);
+  assert.throws(() => loadConfig({ SOLANA_RPC_URLS: '' }), /SOLANA_RPC_URLS/);
+});

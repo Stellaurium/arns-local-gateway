@@ -7,6 +7,27 @@ import path from 'node:path';
 import { BundlePeerSource } from '../src/native/bundle-peer-source.js';
 import { ArweavePeerPool } from '../src/native/peer-pool.js';
 
+test('a fast peer result is returned without waiting for an unrelated slow peer', async () => {
+  const source = new BundlePeerSource({ indexUrls: [], peers: [], timeoutMs: 100, maxResponseBytes: 1024 });
+  let slowFinished = false;
+  const result = await source.tryPeerBatches(['fast', 'slow'], async peer => {
+    if (peer === 'slow') { await new Promise(resolve => setTimeout(resolve, 100)); slowFinished = true; throw new Error('slow failure'); }
+    return 'chunk';
+  });
+  assert.equal(result.value, 'chunk');
+  assert.equal(slowFinished, false, 'cold large files must not pay the slowest peer timeout for every chunk');
+});
+
+test('retries a transient GraphQL connection reset before abandoning an available index', async () => {
+  let calls = 0;
+  const source = new BundlePeerSource({ indexUrls: ['https://index.example/graphql'], timeoutMs: 100, maxResponseBytes: 1024,
+    fetchImpl: async () => { calls++; if (calls === 1) throw new TypeError('fetch failed');
+      return jsonResponse({ data: { transactions: { edges: [{ node: { bundledIn: { id: 'B'.repeat(43) }, data: { size: '100', type: 'text/html' } } }] } } });
+    } });
+  assert.equal((await source.findParent('A'.repeat(43))).parentId, 'B'.repeat(43));
+  assert.equal(calls, 2);
+});
+
 function avroLong(value) {
   let remaining = BigInt(value) << 1n;
   const bytes = [];

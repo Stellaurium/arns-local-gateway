@@ -14,7 +14,7 @@ server.listen(config.port, config.host, () => {
   console.log(`  模式：${config.gatewayMode}`);
   if (config.gatewayMode === 'native') {
     console.log(`  ArNS：Solana RPC 直接解析`);
-    console.log(`  RPC：${config.solanaRpcUrls.join(', ')}`);
+    console.log(`  RPC：${config.solanaRpcUrls.map(url => new URL(url).origin).join(', ')}`);
     console.log(`  Bundle 索引：${config.bundleIndexUrls.join(', ')}`);
     console.log(`  Arweave 节点：${config.arweavePeers.join(', ')}`);
     console.log(`  永久对象库：${config.dataDir}\n`);

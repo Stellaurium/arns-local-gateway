@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { retryTransientRead } from './retry-read.js';
 
 const SIGNATURES = new Map([
   [1, { signatureLength: 512, ownerLength: 512 }],
@@ -84,13 +85,10 @@ export function extractDataItem(item, expectedId) {
 }
 
 async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (options?.signal) signals.push(options.signal);
+  // Keep the timeout attached while the response body is being consumed.
+  return fetchImpl(url, { ...options, signal: AbortSignal.any(signals) });
 }
 
 export class BundlePeerSource {
@@ -115,15 +113,16 @@ export class BundlePeerSource {
 
   async findParent(id) {
     const errors = [];
-    const query = 'query($ids:[ID!]){transactions(ids:$ids){edges{node{id bundledIn{id} data{size type}}}}}';
+    const query = 'query($ids:[ID!]){transactions(ids:$ids){edges{node{id bundledIn{id} data{size type} tags{name value}}}}}';
     for (const url of this.indexUrls) {
       try {
+        return await retryTransientRead(async () => {
         const response = await fetchWithTimeout(this.fetchImpl, url, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ query, variables: { ids: [id] } })
         }, this.timeoutMs);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
         const payload = await response.json();
         const node = payload?.data?.transactions?.edges?.[0]?.node;
         if (!node) throw new Error('Data item was not found');
@@ -131,8 +130,10 @@ export class BundlePeerSource {
           parentId: node.bundledIn?.id ?? null,
           dataSize: Number(node.data?.size ?? 0),
           contentType: node.data?.type ?? null,
+          contentEncoding: node.tags?.find(tag => tag.name.toLowerCase() === 'content-encoding')?.value ?? null,
           indexUrl: url
         };
+        });
       } catch (error) {
         errors.push(`${url}: ${error.message}`);
       }
@@ -140,9 +141,9 @@ export class BundlePeerSource {
     throw new Error(`Bundle index lookup failed: ${errors.join('; ')}`);
   }
 
-  async fetchChunkFromPeer(peer, absoluteOffset) {
+  async fetchChunkFromPeer(peer, absoluteOffset, signal) {
     const startedAt = Date.now();
-    const response = await fetchWithTimeout(this.fetchImpl, `${peer}/chunk/${absoluteOffset}`, {}, this.timeoutMs);
+    const response = await fetchWithTimeout(this.fetchImpl, `${peer}/chunk/${absoluteOffset}`, { signal }, this.timeoutMs);
     if (!response.ok) throw new Error(`chunk HTTP ${response.status}`);
     const payload = await response.json();
     if (typeof payload?.chunk !== 'string' || payload.absolute_end_offset === undefined) throw new Error('Invalid chunk response');
@@ -158,17 +159,26 @@ export class BundlePeerSource {
     const errors = [];
     for (let cursor = 0; cursor < peers.length; cursor += this.peerRequestConcurrency) {
       const batch = peers.slice(cursor, cursor + this.peerRequestConcurrency);
-      const results = await Promise.all(batch.map(async (peer) => {
+      const controller = new AbortController();
+      const failures = [];
+      try {
+        const value = await Promise.any(batch.map(async (peer) => {
         try {
-          return { ok: true, value: await operation(peer) };
+          return await operation(peer, controller.signal);
         } catch (error) {
-          this.peerPool.recordFailure(peer);
-          return { ok: false, peer, error };
+          if (!controller.signal.aborted) {
+            this.peerPool.recordFailure(peer);
+            failures.push(`${peer}: ${error.message}`);
+          }
+          throw error;
         }
-      }));
-      const success = results.find((result) => result.ok);
-      if (success) return { value: success.value, errors };
-      for (const result of results) errors.push(`${result.peer}: ${result.error.message}`);
+        }));
+        controller.abort();
+        return { value, errors };
+      } catch {
+        controller.abort();
+        errors.push(...failures);
+      }
     }
     return { value: null, errors };
   }
@@ -195,7 +205,7 @@ export class BundlePeerSource {
 
   async fetchChunk(absoluteOffset, discoveryRoots = []) {
     return this.withPeerFailover(
-      (peer) => this.fetchChunkFromPeer(peer, absoluteOffset),
+      (peer, signal) => this.fetchChunkFromPeer(peer, absoluteOffset, signal),
       `Chunk ${absoluteOffset}`,
       discoveryRoots
     );
@@ -220,9 +230,9 @@ export class BundlePeerSource {
 
   async getTransactionLayout(transactionId) {
     if (this.transactionLayouts.has(transactionId)) return this.transactionLayouts.get(transactionId);
-    const layout = await this.withPeerFailover(async (peer) => {
+    const layout = await this.withPeerFailover(async (peer, signal) => {
       const startedAt = Date.now();
-      const response = await fetchWithTimeout(this.fetchImpl, `${peer}/tx/${transactionId}/offset`, {}, this.timeoutMs);
+      const response = await fetchWithTimeout(this.fetchImpl, `${peer}/tx/${transactionId}/offset`, { signal }, this.timeoutMs);
       if (!response.ok) throw new Error(`transaction offset HTTP ${response.status}`);
       const transaction = await response.json();
       const size = BigInt(transaction.size);
@@ -269,6 +279,7 @@ export class BundlePeerSource {
     const parsed = extractDataItem(item, id);
     if (parent.dataSize && parsed.body.length !== parent.dataSize) throw new Error('Indexed data size does not match extracted data');
     const contentType = parsed.tags.find((tag) => tag.name.toLowerCase() === 'content-type')?.value;
+    const contentEncoding = parsed.tags.find((tag) => tag.name.toLowerCase() === 'content-encoding')?.value;
     return {
       body: parsed.body,
       metadata: {
@@ -283,6 +294,7 @@ export class BundlePeerSource {
         tags: parsed.tags,
         headers: {
           ...(contentType ? { 'content-type': contentType } : {}),
+          ...(contentEncoding ? { 'content-encoding': contentEncoding } : {}),
           'content-length': String(parsed.body.length)
         }
       },
@@ -308,6 +320,7 @@ export class BundlePeerSource {
         directL1Transaction: true,
         headers: {
           ...(indexed.contentType ? { 'content-type': indexed.contentType } : {}),
+          ...(indexed.contentEncoding ? { 'content-encoding': indexed.contentEncoding } : {}),
           'content-length': String(body.length)
         }
       },

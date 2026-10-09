@@ -16,17 +16,19 @@ ArNS input → Solana RPC → Target ID → Manifest/Data ID
 
 - 接受 `permapages`、`permapages.ar`、`ar://permapages`、`docs.ar.io` 等输入形式。
 - 直接从 Solana RPC 读取 ArNS/ANT 状态，不依靠公共 Gateway 的子域名解析。
+- Solana RPC 池按查询方法自动切换、退避和有限 BFS 发现；可选桥接网页自身的只读 RPC。
 - 自己解析 Arweave Path Manifest 和浏览器子路径。
 - 从普通 Arweave 节点读取交易 offset 与 Chunk；offset 和 Chunk 可以来自不同节点。
 - 从 seed 和历史快照执行 `/peers` BFS，维护本地节点池并定期增删更新。
 - 支持 Bundle Data Item 和普通非 Bundle L1 数据。
+- 根据链上 Content-Encoding 解码 gzip、deflate 和 Brotli 文件，保留原始不可变缓存。
 - Data ID 内容永久缓存在本地，不设置人为过期时间。
 - raw Gateway 仅作为可选的最后兼容兜底。
 - 默认只监听 `127.0.0.1`，不包含遥测、账户或外部管理服务。
 
 ## 快速开始
 
-要求 Node.js 20 或更新版本。
+要求 Node.js 20.18.0 或更新版本。
 
 第一次安装、磁盘占用、更新和常见故障见 [安装与构建](doc/安装与构建.md)。
 
@@ -104,11 +106,14 @@ https://docs.ar.io/learn
 .data/resolutions/   ArNS → Target 的 TTL 缓存
 .data/objects/       Data ID → 不可变文件与元数据
 .data/peer-pool.json 节点发现快照
+.data/solana-rpc-pool.json Solana RPC 发现快照
 node_modules/        项目本地依赖
 .npm-cache/          项目本地 npm 下载缓存
 ```
 
 ArNS 名称映射可变，必须遵守 TTL；Data ID 内容不可变，因此本地对象不会按时间失效。磁盘只随实际访问的文件增长，不会自动下载整个 Arweave 链或所有 Bundle。
+
+名称 URL 使用 `no-cache, must-revalidate` 和 ETag/304，避免浏览器把旧网站版本永久冻结；动态 RPC 查询仅短缓存 2 秒。详细策略及升级后的强制刷新方式见 [缓存与 RPC 池](doc/缓存与RPC池.md)。
 
 预下载一个 Manifest 网站：
 
@@ -142,7 +147,10 @@ npm start
 |---|---|
 | `HOST` | `127.0.0.1`，只监听本机 |
 | `PORT` | `4318` |
-| `SOLANA_RPC_URLS` | ArNS/ANT 查询候选 |
+| `SOLANA_RPC_URLS` | ArNS/ANT 与已接入网页的 Solana 只读查询候选 |
+| `SOLANA_RPC_BRIDGE_NAMES` | 注入只读 RPC 桥接的 ArNS 名称；默认 `cyberleek`，空值关闭 |
+| `SOLANA_RPC_DISCOVERY_ENABLED` | 是否通过 `getClusterNodes` 有限 BFS 发现，默认开启 |
+| `SOLANA_RPC_CACHE_TTL_MS` | 动态 RPC 查询短缓存，默认 2000；0 禁用 |
 | `BUNDLE_INDEX_URLS` | `bundledIn` GraphQL 候选 |
 | `ARWEAVE_PEERS` | BFS seed 节点 |
 | `PEER_DISCOVERY_MAX_PEERS` | 节点快照上限，默认 512 |
@@ -162,6 +170,8 @@ npm run check:endpoints
 - `npm test`：确定性单元/回归测试，不依赖公共网络。
 - `check:endpoints`：检查当前 RPC、GraphQL 和 seed 节点。
 
+空缓存、全新浏览器的实站验证及已知限制见 [兼容性测试](doc/兼容性测试.md)。
+
 ## 目前还不完整的部分
 
 - 未验证完整 Data Item 公钥签名。
@@ -170,7 +180,7 @@ npm run check:endpoints
 - 暂不支持任意深度的嵌套 Bundle。
 - 大文件目前整体进入内存后再响应，尚未实现端到端流式传输和 HTTP Range。
 - 没有面向公网部署的 HTTPS、认证、配额和滥用防护。
-- dApp 自己发出的业务 RPC、钱包、AO 或 API 请求不由本 Gateway 离线化。
+- 已接入桥接的网页可经本地池读取 Solana 数据，但不能离线刷新链上状态；钱包、AO、其他 API 及未接入的请求仍依赖外部服务。
 
 因此它适合个人本地访问、开发、研究和缓存，不应被描述为完整 Arweave 全节点或完全 trustless Gateway。
 
@@ -179,3 +189,5 @@ npm run check:endpoints
 - [使用方式手册](doc/使用方式手册.md)
 - [安装与构建](doc/安装与构建.md)
 - [开发架构手册](doc/开发架构手册.md)
+- [缓存与 RPC 池](doc/缓存与RPC池.md)
+- [兼容性测试](doc/兼容性测试.md)

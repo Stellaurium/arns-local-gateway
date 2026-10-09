@@ -14,18 +14,37 @@ async function timedFetch(url, options = {}, timeoutMs = 8_000) {
   }
 }
 
-async function checkSolana(url) {
+async function checkSolana(url, method, params) {
+  const startedAt = performance.now();
+  const safeUrl = new URL(url).origin;
   try {
-    const { response, durationMs } = await timedFetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' })
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: AbortSignal.timeout(8_000), redirect: 'error'
     });
-    const payload = await response.json();
-    return { type: 'solana-rpc', url, ok: response.ok && payload.result === 'ok', status: response.status, durationMs, detail: payload.result ?? payload.error?.message };
+    const text = await response.text();
+    let payload;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    const ok = response.ok && payload?.jsonrpc === '2.0' && Object.hasOwn(payload, 'result');
+    return { type: 'solana-rpc', url: safeUrl, method, ok, status: response.status,
+      durationMs: Math.round(performance.now() - startedAt), detail: ok ? 'supported' : `HTTP ${response.status}; RPC ${payload?.error?.code ?? 'invalid response'}` };
   } catch (error) {
-    return { type: 'solana-rpc', url, ok: false, detail: error.message };
+    return { type: 'solana-rpc', url: safeUrl, method, ok: false, detail: error.name };
   }
+}
+
+async function checkSolanaCapabilities(url) {
+  // A program with no application-owned accounts keeps this capability probe small.
+  const checks = [
+    ['getSlot', []],
+    ['getAccountInfo', ['11111111111111111111111111111111', { encoding: 'base64' }]],
+    ['getProgramAccounts', ['ComputeBudget111111111111111111111111111111', { encoding: 'base64', dataSlice: { offset: 0, length: 0 } }]]
+  ];
+  const results = [];
+  for (const [method, params] of checks) results.push(await checkSolana(url, method, params));
+  return results;
 }
 
 async function checkBundleIndex(url) {
@@ -54,16 +73,22 @@ async function checkArweavePeer(url) {
   }
 }
 
-const results = await Promise.all([
-  ...config.solanaRpcUrls.map(checkSolana),
+const results = (await Promise.all([
+  ...config.solanaRpcUrls.map(checkSolanaCapabilities),
   ...config.bundleIndexUrls.map(checkBundleIndex),
   ...config.arweavePeers.map(checkArweavePeer)
-]);
+])).flat();
 
 console.table(results);
 for (const type of ['solana-rpc', 'bundle-index', 'arweave-peer']) {
   if (!results.some((result) => result.type === type && result.ok)) {
     console.error(`${type}: 没有可用端点`);
+    process.exitCode = 1;
+  }
+}
+for (const method of ['getAccountInfo', 'getProgramAccounts']) {
+  if (!results.some(result => result.type === 'solana-rpc' && result.method === method && result.ok)) {
+    console.error(`${method}: 没有确认支持此查询的 RPC；基本在线不代表支持账户或索引查询`);
     process.exitCode = 1;
   }
 }

@@ -10,6 +10,12 @@ function booleanValue(value, fallback) {
   return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
 }
 
+function nonNegativeInteger(value, fallback) {
+  if (value === undefined) return fallback;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
 export function loadConfig(env = process.env, cwd = process.cwd()) {
   const upstreamGateways = (env.UPSTREAM_GATEWAYS ?? 'ar.anyone.tech,ar.io,arweave.dev,turbo-gateway.com')
     .split(',')
@@ -26,7 +32,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     }
   }
 
-  const solanaRpcUrls = (env.SOLANA_RPC_URLS ?? 'https://solana-rpc.publicnode.com,https://public.rpc.solanavibestation.com,https://solana-mainnet.gateway.tatum.io,https://solana.api.pocket.network')
+  const solanaRpcUrls = (env.SOLANA_RPC_URLS ?? 'https://public.rpc.solanavibestation.com,https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com,https://solana.api.pocket.network,https://solana-mainnet.gateway.tatum.io')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
@@ -43,7 +49,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     .map((value) => value.trim().replace(/\/$/, ''))
     .filter(Boolean);
 
-  if (solanaRpcUrls.some((value) => !/^https?:\/\//i.test(value))) {
+  if (!solanaRpcUrls.length || solanaRpcUrls.some((value) => !/^https?:\/\//i.test(value))) {
     throw new Error('SOLANA_RPC_URLS must contain HTTP(S) URLs');
   }
   if (dataProviderUrls.some((value) => !/^https?:\/\//i.test(value) || !value.includes('{id}'))) {
@@ -59,6 +65,16 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     localRootHost: (env.LOCAL_ROOT_HOST ?? 'localhost').toLowerCase(),
     gatewayMode: (env.GATEWAY_MODE ?? 'native').toLowerCase(),
     solanaRpcUrls,
+    solanaRpcTimeoutMs: positiveInteger(env.SOLANA_RPC_TIMEOUT_MS, 4000),
+    solanaRpcRequestTimeoutMs: positiveInteger(env.SOLANA_RPC_REQUEST_TIMEOUT_MS, 18000),
+    solanaRpcCacheTtlMs: nonNegativeInteger(env.SOLANA_RPC_CACHE_TTL_MS, 2000),
+    solanaRpcDiscoveryEnabled: booleanValue(env.SOLANA_RPC_DISCOVERY_ENABLED, true),
+    solanaRpcMaxEndpoints: positiveInteger(env.SOLANA_RPC_MAX_ENDPOINTS, 32),
+    solanaRpcDiscoveryMaxDepth: positiveInteger(env.SOLANA_RPC_DISCOVERY_MAX_DEPTH, 2),
+    solanaRpcDiscoveryMaxProbes: positiveInteger(env.SOLANA_RPC_DISCOVERY_MAX_PROBES, 48),
+    solanaRpcRefreshIntervalMs: positiveInteger(env.SOLANA_RPC_REFRESH_INTERVAL_SECONDS, 21600)*1000,
+    solanaRpcBridgeNames: (env.SOLANA_RPC_BRIDGE_NAMES ?? 'cyberleek').split(',').map(v=>v.trim().toLowerCase()).filter(Boolean),
+    solanaRpcBrowserHosts: (env.SOLANA_RPC_BROWSER_HOSTS ?? 'api.mainnet-beta.solana.com,solana.api.onfinality.io,public.rpc.solanavibestation.com,solana.api.pocket.network,solana-rpc.publicnode.com,solana-mainnet.gateway.tatum.io').split(',').map(v=>v.trim().toLowerCase()).filter(Boolean),
     bundleIndexUrls,
     arweavePeers,
     dataProviderUrls,
